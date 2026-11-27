@@ -52,20 +52,30 @@ public class ProcessController {
           jobWorkerConfig.setType(jobType);
           jobWorkerConfig.setAutoComplete(true);
           jobWorkerConfig.setName(jobType);
-          JobWorker jobWorker =
-              jobWorkerManager.openWorker(
-                  zeebe,
-                  jobWorkerConfig,
-                  (client, job) -> {
-                    // Read payload from process
-                    String response = (String) job.getVariablesAsMap().get("response");
-                    LOG.info(".. finished with response: `" + response + "`");
-                    // When the job is there, read the response payload and return our response via
-                    // the Mono
-                    sink.success(response);
-                  });
+          // JobWorkerManager keeps its workers in an unsynchronized list, and workers run on
+          // several threads, so opening and closing them is serialized here
+          JobWorker jobWorker;
+          synchronized (jobWorkerManager) {
+            jobWorker =
+                jobWorkerManager.openWorker(
+                    zeebe,
+                    jobWorkerConfig,
+                    (client, job) -> {
+                      // Read payload from process
+                      String response = (String) job.getVariablesAsMap().get("response");
+                      LOG.info(".. finished with response: `" + response + "`");
+                      // When the job is there, read the response payload and return our response
+                      // via the Mono
+                      sink.success(response);
+                    });
+          }
           // Make sure this worker is closed once the response was received
-          sink.onDispose(() -> jobWorkerManager.closeWorker(jobWorker));
+          sink.onDispose(
+              () -> {
+                synchronized (jobWorkerManager) {
+                  jobWorkerManager.closeWorker(jobWorker);
+                }
+              });
         });
   }
 }
